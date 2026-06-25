@@ -1,0 +1,145 @@
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  PATIENT
+  DOCTOR
+  PHARMACIST
+  NURSE
+  LAB_SCIENTIST
+  ADMIN
+}
+
+enum BookingStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  COMPLETED
+  CANCELLED
+}
+
+enum BookingType {
+  CONSULTATION
+  HOME_VISIT
+  SAMPLE_COLLECTION
+  PRESCRIPTION
+}
+
+enum AmbulanceStatus {
+  REQUESTED
+  DISPATCHED
+  EN_ROUTE
+  ARRIVED
+  COMPLETED
+}
+
+model User {
+  id            String    @id @default(uuid()) @db.Uuid
+  name          String
+  email         String    @unique
+  password      String
+  role          Role
+  phone         String?
+  address       String?
+  latitude      Float?
+  longitude     Float?
+  specialty     String?
+  licenseNumber String?
+  isVerified    Boolean   @default(false)
+  isAvailable   Boolean   @default(true)
+  avatarUrl     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  patientBookings      Booking[]          @relation("PatientBookings")
+  professionalBookings Booking[]          @relation("ProfessionalBookings")
+  sentMessages         Message[]
+  chatRoomsAsPatient   ChatRoom[]         @relation("PatientRooms")
+  chatRoomsAsPro       ChatRoom[]         @relation("ProfessionalRooms")
+  ambulanceRequests    AmbulanceDispatch[]
+  matchRequests        MatchRequest[]
+}
+
+model ChatRoom {
+  id             String    @id @default(uuid()) @db.Uuid
+  patientId      String    @db.Uuid
+  professionalId String    @db.Uuid
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  closedAt       DateTime?
+
+  patient      User      @relation("PatientRooms", fields: [patientId], references: [id])
+  professional User      @relation("ProfessionalRooms", fields: [professionalId], references: [id])
+  messages     Message[]
+  booking      Booking?
+}
+
+model Message {
+  id        String   @id @default(uuid()) @db.Uuid
+  roomId    String   @db.Uuid
+  senderId  String   @db.Uuid
+  content   String
+  type      String   @default("text")
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  room   ChatRoom @relation(fields: [roomId], references: [id])
+  sender User     @relation(fields: [senderId], references: [id])
+}
+
+model Booking {
+  id             String        @id @default(uuid()) @db.Uuid
+  patientId      String        @db.Uuid
+  professionalId String        @db.Uuid
+  roomId         String?       @unique @db.Uuid
+  type           BookingType
+  status         BookingStatus @default(PENDING)
+  scheduledAt    DateTime?
+  notes          String?
+  address        String?
+  latitude       Float?
+  longitude      Float?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  patient      User      @relation("PatientBookings", fields: [patientId], references: [id])
+  professional User      @relation("ProfessionalBookings", fields: [professionalId], references: [id])
+  room         ChatRoom? @relation(fields: [roomId], references: [id])
+}
+
+model MatchRequest {
+  id            String      @id @default(uuid()) @db.Uuid
+  patientId     String      @db.Uuid
+  specialty     String
+  bookingType   BookingType
+  urgency       String      @default("normal")
+  description   String?
+  assignedProId String?     @db.Uuid
+  status        String      @default("pending")
+  createdAt     DateTime    @default(now())
+
+  patient User @relation(fields: [patientId], references: [id])
+}
+
+model AmbulanceDispatch {
+  id               String          @id @default(uuid()) @db.Uuid
+  patientId        String          @db.Uuid
+  latitude         Float
+  longitude        Float
+  address          String?
+  severity         String
+  status           AmbulanceStatus @default(REQUESTED)
+  dispatchedAt     DateTime        @default(now())
+  estimatedArrival String?
+  completedAt      DateTime?
+  notes            String?
+
+  patient User @relation(fields: [patientId], references: [id])
+}
