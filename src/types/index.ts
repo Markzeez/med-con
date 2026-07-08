@@ -73,6 +73,9 @@ export interface Booking {
   patientId: string;
   professionalId: string;
   roomId?: string;
+  room?: {
+    id: string;
+  };
   type: BookingType;
   status: BookingStatus;
   scheduledAt?: string;

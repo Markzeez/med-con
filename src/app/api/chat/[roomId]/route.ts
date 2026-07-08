@@ -7,12 +7,12 @@ import { prisma } from "@/lib/prisma";
 // GET - fetch messages for a room
 export async function GET(
   req: NextRequest,
-  { params }: { params: { roomId: string } }
+  { params }: { params: Promise<{ roomId: string }> }
 ) {
   const session = await getServerSession(authOptions);
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { roomId } = params;
+  const { roomId } = await params;
 
   // Verify user is a participant in this room
   const room = await prisma.chatRoom.findUnique({
@@ -43,12 +43,12 @@ export async function GET(
 // POST - send a message (also persisted via socket, this is the REST fallback)
 export async function POST(
   req: NextRequest,
-  { params }: { params: { roomId: string } }
+  { params }: { params: Promise<{ roomId: string }> }
 ) {
   const session = await getServerSession(authOptions);
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { roomId } = params;
+  const { roomId } = await params;
   const { content, type = "text" } = await req.json();
 
   const room = await prisma.chatRoom.findUnique({ where: { id: roomId } });

@@ -1,8 +1,13 @@
 // src/lib/auth.ts
+// NOTE: This module uses bcrypt (native bindings) and Prisma — both require
+// the Node.js runtime. The route handler that imports this must set:
+//   export const runtime = "nodejs";
 import { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
-import bcrypt from "bcryptjs";
-import { prisma } from "./prisma";
+import bcrypt from "bcryptjs"; // bcryptjs is pure-JS; safer across runtimes than bcrypt
+import prisma from "../lib/prisma";
+
+// declare module "bcryptjs";
 
 export const authOptions: NextAuthOptions = {
   session: { strategy: "jwt" },
@@ -45,9 +50,15 @@ export const authOptions: NextAuthOptions = {
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
-        token.id = user.id;
-        token.role = (user as any).role;
-        token.isVerified = (user as any).isVerified;
+        const authUser = user as {
+          id?: string;
+          role?: string;
+          isVerified?: boolean;
+        };
+
+        token.id = authUser.id ?? token.id;
+        token.role = authUser.role ?? token.role;
+        token.isVerified = authUser.isVerified ?? token.isVerified;
       }
       return token;
     },
@@ -74,3 +85,10 @@ declare module "next-auth" {
     };
   }
 }
+
+
+// // Pages Router
+// import NextAuth from "next-auth";
+// import { authOptions } from "@/lib/auth";
+
+// export default NextAuth(authOptions);

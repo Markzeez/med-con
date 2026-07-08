@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -13,7 +13,7 @@ const BOOKING_TYPES = [
 
 const SPECIALTIES = ["General Practice", "Cardiology", "Neurology", "Pediatrics", "Dermatology", "Orthopedics", "Oncology", "Psychiatry"];
 
-export default function BookingPage() {
+function BookingPageContent() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -190,5 +190,13 @@ export default function BookingPage() {
         </form>
       </main>
     </div>
+  );
+}
+
+export default function BookingPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><div className="animate-spin w-8 h-8 border-2 border-sky-500 border-t-transparent rounded-full" /></div>}>
+      <BookingPageContent />
+    </Suspense>
   );
 }

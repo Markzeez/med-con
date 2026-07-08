@@ -24,7 +24,7 @@ export default function ChatPage({ params }: ChatPageProps) {
   const [ambulanceActive, setAmbulanceActive] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
-  const typingTimer = useRef<ReturnType<typeof setTimeout>>();
+  const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (status === "unauthenticated") router.push("/auth/login");
@@ -129,7 +129,9 @@ export default function ChatPage({ params }: ChatPageProps) {
     setInput(e.target.value);
     if (!session) return;
     emit("typing:start", { roomId, userId: session.user.id, name: session.user.name! });
-    clearTimeout(typingTimer.current);
+    if (typingTimer.current) {
+      clearTimeout(typingTimer.current);
+    }
     typingTimer.current = setTimeout(() => {
       emit("typing:stop", { roomId, userId: session.user.id });
     }, 1500);

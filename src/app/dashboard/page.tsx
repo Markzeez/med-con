@@ -3,6 +3,8 @@ import { useSession, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { getPlanDisplayPrice, SUBSCRIPTION_PLANS, type SubscriptionPlan } from "@/lib/feeArrangement";
+import type { Booking } from "@/types";
 
 const ROLE_COLORS: Record<string, string> = {
   PATIENT: "bg-blue-100 text-blue-700",
@@ -16,12 +18,30 @@ const ROLE_COLORS: Record<string, string> = {
 export default function DashboardPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
-  const [bookings, setBookings] = useState<any[]>([]);
+  const [bookings, setBookings] = useState<Booking[]>([]);
   const [loadingBookings, setLoadingBookings] = useState(true);
+  const [activePlanId, setActivePlanId] = useState<string | null>(null);
+  const [subscriptionMessage, setSubscriptionMessage] = useState("");
+  const [greeting, setGreeting] = useState("Good day");
+
+  const storedPlanId = typeof window !== "undefined" ? window.localStorage.getItem("medcon-subscription") : null;
 
   useEffect(() => {
     if (status === "unauthenticated") router.push("/auth/login");
   }, [status, router]);
+
+  useEffect(() => {
+    const hour = new Date().getHours(); 
+    if (hour >= 5 && hour < 12) {
+      setGreeting("Good morning");
+    } else if (hour >= 12 && hour < 17) {
+      setGreeting("Good afternoon");
+    } else if (hour >= 17 && hour < 21) {
+      setGreeting("Good evening");
+    } else {
+      setGreeting("Good night");
+    }
+  }, []);
 
   useEffect(() => {
     if (session) {
@@ -31,6 +51,20 @@ export default function DashboardPage() {
         .catch(() => setLoadingBookings(false));
     }
   }, [session]);
+
+  useEffect(() => {
+    if (storedPlanId) {
+      setActivePlanId(storedPlanId);
+    }
+  }, [storedPlanId]);
+
+  const handleSubscribe = (plan: SubscriptionPlan) => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("medcon-subscription", plan.id);
+    }
+    setActivePlanId(plan.id);
+    setSubscriptionMessage(`You are now subscribed to ${plan.name} for ${getPlanDisplayPrice(plan)}.`);
+  };
 
   if (status === "loading") {
     return <div className="min-h-screen flex items-center justify-center"><div className="animate-spin w-8 h-8 border-2 border-sky-500 border-t-transparent rounded-full" /></div>;
@@ -72,11 +106,63 @@ export default function DashboardPage() {
         {/* Welcome */}
         <div className="mb-8">
           <h1 className="text-2xl font-bold text-gray-900">
-            Good day, {session.user.name?.split(" ")[0]} 👋
+            {greeting}, {session.user.name?.split(" ")[0]} 👋
           </h1>
           <p className="text-gray-500 text-sm mt-1">
             {isPatient ? "How can we help you today?" : "You have patients waiting for your expertise."}
           </p>
+        </div>
+
+        {/* Subscription access */}
+        <div className="mb-8 rounded-3xl border border-sky-100 bg-linear-to-br from-sky-600 to-cyan-500 p-6 text-white shadow-sm">
+          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div>
+              <p className="text-sm font-medium text-sky-100">Subscribe to use the platform</p>
+              <h2 className="text-xl font-semibold">Choose a monthly or yearly plan</h2>
+              <p className="text-sm text-sky-100 mt-1">Unlock full access for consultations, chats, and emergency support.</p>
+            </div>
+            <div className="rounded-full bg-white/15 px-3 py-1 text-sm font-medium">
+              {activePlanId ? "Active subscription" : "No active plan yet"}
+            </div>
+          </div>
+
+          <div className="mt-6 grid gap-4 md:grid-cols-2">
+            {SUBSCRIPTION_PLANS.map((plan) => {
+              const isActive = activePlanId === plan.id;
+              return (
+                <div key={plan.id} className={`rounded-2xl border p-4 ${isActive ? "border-white bg-white/20" : "border-white/20 bg-white/10"}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className="font-semibold">{plan.name}</h3>
+                      <p className="text-sm text-sky-100 mt-1">{plan.description}</p>
+                    </div>
+                    {plan.highlight && <span className="rounded-full bg-amber-400 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-sky-950">Best value</span>}
+                  </div>
+                  <div className="mt-4 flex items-end gap-1">
+                    <span className="text-3xl font-semibold">{getPlanDisplayPrice(plan)}</span>
+                  </div>
+                  <ul className="mt-4 space-y-2 text-sm text-sky-50">
+                    {plan.features.map((feature) => (
+                      <li key={feature} className="flex items-center gap-2">
+                        <span>✓</span>
+                        <span>{feature}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <button
+                    onClick={() => handleSubscribe(plan)}
+                    className={`mt-5 w-full rounded-xl px-3 py-2 text-sm font-semibold transition ${isActive ? "bg-white text-sky-700" : "bg-sky-950/20 text-white hover:bg-sky-950/30"}`}
+                  >
+                    {isActive ? "Selected" : "Subscribe"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+
+          {subscriptionMessage && (
+            <p className="mt-4 text-sm text-sky-50">{subscriptionMessage}</p>
+          )}
         </div>
 
         {/* Quick Actions */}
