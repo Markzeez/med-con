@@ -1,146 +1,88 @@
-// prisma/schema.prisma
-generator client {
-  provider = "prisma-client-js"
-}
+-- Drop the incomplete users table if you already created it
+DROP TABLE IF EXISTS public.users CASCADE;
 
-datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
-}
+-- Users
+CREATE TABLE public.users (
+  id TEXT DEFAULT gen_random_uuid()::TEXT PRIMARY KEY,
+  name TEXT,
+  email TEXT UNIQUE NOT NULL,
+  password TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('PATIENT','DOCTOR','PHARMACIST','NURSE','LAB_SCIENTIST','ADMIN')),
+  phone TEXT,
+  address TEXT,
+  latitude DOUBLE PRECISION,
+  longitude DOUBLE PRECISION,
+  specialty TEXT,
+  license_number TEXT,
+  is_verified BOOLEAN DEFAULT false,
+  is_available BOOLEAN DEFAULT true,
+  avatar_url TEXT,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
 
-enum Role {
-  PATIENT
-  DOCTOR
-  PHARMACIST
-  NURSE
-  LAB_SCIENTIST
-  ADMIN
-}
+-- Chat Rooms
+CREATE TABLE public.chat_rooms (
+  id TEXT DEFAULT gen_random_uuid()::TEXT PRIMARY KEY,
+  patient_id TEXT NOT NULL REFERENCES public.users(id),
+  professional_id TEXT NOT NULL REFERENCES public.users(id),
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  closed_at TIMESTAMPTZ
+);
 
-enum BookingStatus {
-  PENDING
-  ACCEPTED
-  DECLINED
-  COMPLETED
-  CANCELLED
-}
+-- Messages
+CREATE TABLE public.messages (
+  id TEXT DEFAULT gen_random_uuid()::TEXT PRIMARY KEY,
+  room_id TEXT NOT NULL REFERENCES public.chat_rooms(id),
+  sender_id TEXT NOT NULL REFERENCES public.users(id),
+  content TEXT NOT NULL,
+  type TEXT DEFAULT 'text',
+  is_read BOOLEAN DEFAULT false,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
 
-enum BookingType {
-  CONSULTATION
-  HOME_VISIT
-  SAMPLE_COLLECTION
-  PRESCRIPTION
-}
+-- Bookings
+CREATE TABLE public.bookings (
+  id TEXT DEFAULT gen_random_uuid()::TEXT PRIMARY KEY,
+  patient_id TEXT NOT NULL REFERENCES public.users(id),
+  professional_id TEXT NOT NULL REFERENCES public.users(id),
+  room_id TEXT UNIQUE REFERENCES public.chat_rooms(id),
+  type TEXT NOT NULL CHECK (type IN ('CONSULTATION','HOME_VISIT','SAMPLE_COLLECTION','PRESCRIPTION')),
+  status TEXT DEFAULT 'PENDING' CHECK (status IN ('PENDING','ACCEPTED','DECLINED','COMPLETED','CANCELLED')),
+  scheduled_at TIMESTAMPTZ,
+  notes TEXT,
+  address TEXT,
+  latitude DOUBLE PRECISION,
+  longitude DOUBLE PRECISION,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
 
-enum AmbulanceStatus {
-  REQUESTED
-  DISPATCHED
-  EN_ROUTE
-  ARRIVED
-  COMPLETED
-}
+-- Match Requests
+CREATE TABLE public.match_requests (
+  id TEXT DEFAULT gen_random_uuid()::TEXT PRIMARY KEY,
+  patient_id TEXT NOT NULL REFERENCES public.users(id),
+  specialty TEXT NOT NULL,
+  booking_type TEXT NOT NULL CHECK (booking_type IN ('CONSULTATION','HOME_VISIT','SAMPLE_COLLECTION','PRESCRIPTION')),
+  urgency TEXT DEFAULT 'normal',
+  description TEXT,
+  assigned_pro_id TEXT,
+  status TEXT DEFAULT 'pending',
+  created_at TIMESTAMPTZ DEFAULT now()
+);
 
-model User {
-  id            String   @id @default(cuid())
-  name          String?
-  email         String   @unique
-  password      String
-  role          Role
-  phone         String?
-  address       String?
-  latitude      Float?
-  longitude     Float?
-  specialty     String?
-  licenseNumber String?
-  isVerified    Boolean  @default(false)
-  isAvailable   Boolean  @default(true)
-  avatarUrl     String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  patientBookings      Booking[]          @relation("PatientBookings")
-  professionalBookings Booking[]          @relation("ProfessionalBookings")
-  sentMessages         Message[]
-  chatRoomsAsPatient   ChatRoom[]         @relation("PatientRooms")
-  chatRoomsAsPro       ChatRoom[]         @relation("ProfessionalRooms")
-  ambulanceRequests    AmbulanceDispatch[]
-  matchRequests        MatchRequest[]
-}
-
-model ChatRoom {
-  id             String    @id @default(cuid())
-  patientId      String
-  professionalId String
-  isActive       Boolean   @default(true)
-  createdAt      DateTime  @default(now())
-  closedAt       DateTime?
-
-  patient      User      @relation("PatientRooms", fields: [patientId], references: [id])
-  professional User      @relation("ProfessionalRooms", fields: [professionalId], references: [id])
-  messages     Message[]
-  booking      Booking?
-}
-
-model Message {
-  id        String   @id @default(cuid())
-  roomId    String
-  senderId  String
-  content   String
-  type      String   @default("text")
-  isRead    Boolean  @default(false)
-  createdAt DateTime @default(now())
-
-  room   ChatRoom @relation(fields: [roomId], references: [id])
-  sender User     @relation(fields: [senderId], references: [id])
-}
-
-model Booking {
-  id             String        @id @default(cuid())
-  patientId      String
-  professionalId String
-  roomId         String?       @unique
-  type           BookingType
-  status         BookingStatus @default(PENDING)
-  scheduledAt    DateTime?
-  notes          String?
-  address        String?
-  latitude       Float?
-  longitude      Float?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
-
-  patient      User      @relation("PatientBookings", fields: [patientId], references: [id])
-  professional User      @relation("ProfessionalBookings", fields: [professionalId], references: [id])
-  room         ChatRoom? @relation(fields: [roomId], references: [id])
-}
-
-model MatchRequest {
-  id            String      @id @default(cuid())
-  patientId     String
-  specialty     String
-  bookingType   BookingType
-  urgency       String      @default("normal")
-  description   String?
-  assignedProId String?
-  status        String      @default("pending")
-  createdAt     DateTime    @default(now())
-
-  patient User @relation(fields: [patientId], references: [id])
-}
-
-model AmbulanceDispatch {
-  id               String          @id @default(cuid())
-  patientId        String
-  latitude         Float
-  longitude        Float
-  address          String?
-  severity         String
-  status           AmbulanceStatus @default(REQUESTED)
-  dispatchedAt     DateTime        @default(now())
-  estimatedArrival String?
-  completedAt      DateTime?
-  notes            String?
-
-  patient User @relation(fields: [patientId], references: [id])
-}
+-- Ambulance Dispatches
+CREATE TABLE public.ambulance_dispatches (
+  id TEXT DEFAULT gen_random_uuid()::TEXT PRIMARY KEY,
+  patient_id TEXT NOT NULL REFERENCES public.users(id),
+  latitude DOUBLE PRECISION NOT NULL,
+  longitude DOUBLE PRECISION NOT NULL,
+  address TEXT,
+  severity TEXT NOT NULL,
+  status TEXT DEFAULT 'REQUESTED' CHECK (status IN ('REQUESTED','DISPATCHED','EN_ROUTE','ARRIVED','COMPLETED')),
+  dispatched_at TIMESTAMPTZ DEFAULT now(),
+  estimated_arrival TEXT,
+  completed_at TIMESTAMPTZ,
+  notes TEXT
+);
