@@ -1,13 +1,8 @@
 // src/lib/auth.ts
-// NOTE: This module uses bcrypt (native bindings) and Prisma — both require
-// the Node.js runtime. The route handler that imports this must set:
-//   export const runtime = "nodejs";
 import { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
-import bcrypt from "bcryptjs"; // bcryptjs is pure-JS; safer across runtimes than bcrypt
-import prisma from "../lib/prisma";
-
-// declare module "bcryptjs";
+import bcrypt from "bcryptjs";
+import { supabase } from "./supabase";
 
 export const authOptions: NextAuthOptions = {
   session: { strategy: "jwt" },
@@ -25,11 +20,13 @@ export const authOptions: NextAuthOptions = {
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) return null;
 
-        const user = await prisma.user.findUnique({
-          where: { email: credentials.email },
-        });
+        const { data: user, error } = await supabase
+          .from("users")
+          .select("id, name, email, password, role, is_verified")
+          .eq("email", credentials.email)
+          .maybeSingle();
 
-        if (!user) return null;
+        if (error || !user) return null;
 
         const passwordMatch = await bcrypt.compare(
           credentials.password,
@@ -42,7 +39,7 @@ export const authOptions: NextAuthOptions = {
           name: user.name,
           email: user.email,
           role: user.role,
-          isVerified: user.isVerified,
+          isVerified: user.is_verified,
         };
       },
     }),
@@ -55,7 +52,6 @@ export const authOptions: NextAuthOptions = {
           role?: string;
           isVerified?: boolean;
         };
-
         token.id = authUser.id ?? token.id;
         token.role = authUser.role ?? token.role;
         token.isVerified = authUser.isVerified ?? token.isVerified;
@@ -85,10 +81,3 @@ declare module "next-auth" {
     };
   }
 }
-
-
-// // Pages Router
-// import NextAuth from "next-auth";
-// import { authOptions } from "@/lib/auth";
-
-// export default NextAuth(authOptions);

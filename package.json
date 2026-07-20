@@ -3,18 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "postinstall": "prisma generate",
-    "dev": "next dev",
+    "dev": "node --import tsx server.ts",
     "build": "next build",
-    "start": "next start",
+    "start": "NODE_ENV=production node --import tsx server.ts",
     "lint": "eslint"
   },
   "dependencies": {
-    "@supabase/ssr": "^0.12.0",
     "@supabase/supabase-js": "^2.110.6",
-    "@types/bcrypt": "^6.0.0",
-    "bcrypt": "^6.0.0",
     "bcryptjs": "^2.4.3",
+    "dotenv": "^17.4.2",
     "next": "16.2.9",
     "next-auth": "^4.24.14",
     "react": "19.2.4",
@@ -32,6 +29,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.9",
     "tailwindcss": "^4",
+    "tsx": "^4.19.0",
     "typescript": "^5"
   }
 }

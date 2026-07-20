@@ -1,6 +1,6 @@
 // src/lib/matching.ts
-import { prisma } from "./prisma";
-import { BookingType, Role } from "@/types";
+import { supabase } from "./supabase";
+import type { BookingType, Role } from "@/types";
 
 // Map booking types to the professional roles that can serve them
 const BOOKING_TYPE_ROLES: Record<BookingType, Role[]> = {
@@ -19,8 +19,10 @@ interface MatchOptions {
 }
 
 function haversineDistance(
-  lat1: number, lon1: number,
-  lat2: number, lon2: number
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
 ): number {
   const R = 6371; // Earth radius km
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -37,51 +39,47 @@ export async function findBestMatch(options: MatchOptions) {
   const { specialty, bookingType, urgency = "normal", patientLatitude, patientLongitude } = options;
   const eligibleRoles = BOOKING_TYPE_ROLES[bookingType];
 
-  const candidates = await prisma.user.findMany({
-    where: {
-      role: { in: eligibleRoles as any },
-      isAvailable: true,
-      isVerified: true,
-      ...(specialty ? { specialty: { contains: specialty, mode: "insensitive" } } : {}),
-    },
-    select: {
-      id: true,
-      name: true,
-      role: true,
-      specialty: true,
-      latitude: true,
-      longitude: true,
-      avatarUrl: true,
-    },
-  });
+  let query = supabase
+    .from("users")
+    .select("id, name, role, specialty, latitude, longitude, avatar_url")
+    .in("role", eligibleRoles)
+    .eq("is_available", true)
+    .eq("is_verified", true);
 
-  if (candidates.length === 0) return null;
+  if (specialty) {
+    query = query.ilike("specialty", `%${specialty}%`);
+  }
 
-  // Score each candidate
+  const { data: candidates, error } = await query;
+  if (error || !candidates || candidates.length === 0) return null;
+
   const scored = candidates.map((pro) => {
     let score = 100;
-
-    // Distance scoring (if location available)
     if (patientLatitude && patientLongitude && pro.latitude && pro.longitude) {
       const distKm = haversineDistance(
-        patientLatitude, patientLongitude,
-        pro.latitude, pro.longitude
+        patientLatitude,
+        patientLongitude,
+        pro.latitude,
+        pro.longitude
       );
-      // Penalize by distance — closer is better
       score -= Math.min(distKm * 2, 60);
     }
-
-    // Specialty match bonus
     if (specialty && pro.specialty?.toLowerCase().includes(specialty.toLowerCase())) {
       score += 20;
     }
-
-    // Critical urgency boosts nearest available
     if (urgency === "critical" && pro.latitude && pro.longitude) {
       score += 30;
     }
-
-    return { ...pro, score };
+    return {
+      id: pro.id,
+      name: pro.name,
+      role: pro.role,
+      specialty: pro.specialty,
+      latitude: pro.latitude,
+      longitude: pro.longitude,
+      avatarUrl: pro.avatar_url,
+      score,
+    };
   });
 
   scored.sort((a, b) => b.score - a.score);
@@ -90,20 +88,22 @@ export async function findBestMatch(options: MatchOptions) {
 
 export async function createChatRoom(patientId: string, professionalId: string) {
   // Check if active room already exists
-  const existing = await prisma.chatRoom.findFirst({
-    where: {
-      patientId,
-      professionalId,
-      isActive: true,
-    },
-  });
+  const { data: existing } = await supabase
+    .from("chat_rooms")
+    .select("*")
+    .eq("patient_id", patientId)
+    .eq("professional_id", professionalId)
+    .eq("is_active", true)
+    .maybeSingle();
+
   if (existing) return existing;
 
-  return prisma.chatRoom.create({
-    data: { patientId, professionalId },
-    include: {
-      patient: true,
-      professional: true,
-    },
-  });
+  const { data: room, error } = await supabase
+    .from("chat_rooms")
+    .insert({ patient_id: patientId, professional_id: professionalId })
+    .select("*")
+    .single();
+
+  if (error) throw new Error(`Failed to create chat room: ${error.message}`);
+  return room;
 }

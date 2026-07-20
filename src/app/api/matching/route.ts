@@ -1,9 +1,11 @@
 // src/app/api/matching/route.ts
+export const runtime = "nodejs";
+
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { findBestMatch, createChatRoom } from "@/lib/matching";
-import { prisma } from "@/lib/prisma";
+import { supabase } from "@/lib/supabase";
 import { z } from "zod";
 
 const matchSchema = z.object({
@@ -11,6 +13,7 @@ const matchSchema = z.object({
   specialty: z.string().optional(),
   urgency: z.enum(["normal", "urgent", "critical"]).default("normal"),
   description: z.string().optional(),
+  address: z.string().optional(),
   latitude: z.number().optional(),
   longitude: z.number().optional(),
 });
@@ -26,15 +29,22 @@ export async function POST(req: NextRequest) {
     const data = matchSchema.parse(body);
 
     // Save match request
-    const matchRequest = await prisma.matchRequest.create({
-      data: {
-        patientId: session.user.id,
+    const { data: matchRequest, error: mrError } = await supabase
+      .from("match_requests")
+      .insert({
+        patient_id: session.user.id,
         specialty: data.specialty ?? "",
-        bookingType: data.bookingType,
+        booking_type: data.bookingType,
         urgency: data.urgency,
-        description: data.description,
-      },
-    });
+        description: data.description || null,
+      })
+      .select("id")
+      .single();
+
+    if (mrError || !matchRequest) {
+      console.error("Match request insert error:", mrError);
+      return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    }
 
     // Find best professional
     const matched = await findBestMatch({
@@ -46,10 +56,11 @@ export async function POST(req: NextRequest) {
     });
 
     if (!matched) {
-      await prisma.matchRequest.update({
-        where: { id: matchRequest.id },
-        data: { status: "rejected" },
-      });
+      await supabase
+        .from("match_requests")
+        .update({ status: "rejected" })
+        .eq("id", matchRequest.id);
+
       return NextResponse.json(
         { error: "No available professionals found. Please try again shortly." },
         { status: 404 }
@@ -60,22 +71,30 @@ export async function POST(req: NextRequest) {
     const room = await createChatRoom(session.user.id, matched.id);
 
     // Update match request
-    await prisma.matchRequest.update({
-      where: { id: matchRequest.id },
-      data: { status: "matched", assignedProId: matched.id },
-    });
+    await supabase
+      .from("match_requests")
+      .update({ status: "matched", assigned_pro_id: matched.id })
+      .eq("id", matchRequest.id);
 
     // Create a booking record
-    const booking = await prisma.booking.create({
-      data: {
-        patientId: session.user.id,
-        professionalId: matched.id,
-        roomId: room.id,
+    const { data: booking, error: bkError } = await supabase
+      .from("bookings")
+      .insert({
+        patient_id: session.user.id,
+        professional_id: matched.id,
+        room_id: room.id,
         type: data.bookingType,
-        notes: data.description,
+        notes: data.description || null,
+        address: data.address || null,
         status: "PENDING",
-      },
-    });
+      })
+      .select("*")
+      .single();
+
+    if (bkError) {
+      console.error("Booking insert error:", bkError);
+      return NextResponse.json({ error: "Failed to create booking" }, { status: 500 });
+    }
 
     return NextResponse.json({
       room,
@@ -91,7 +110,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// GET - list available professionals by type
+// GET — list available professionals by type
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -100,22 +119,24 @@ export async function GET(req: NextRequest) {
   const role = searchParams.get("role");
   const specialty = searchParams.get("specialty");
 
-  const professionals = await prisma.user.findMany({
-    where: {
-      role: role ? (role as any) : { in: ["DOCTOR", "PHARMACIST", "NURSE", "LAB_SCIENTIST"] },
-      isAvailable: true,
-      isVerified: true,
-      ...(specialty ? { specialty: { contains: specialty, mode: "insensitive" } } : {}),
-    },
-    select: {
-      id: true,
-      name: true,
-      role: true,
-      specialty: true,
-      avatarUrl: true,
-      isAvailable: true,
-    },
-  });
+  let query = supabase
+    .from("users")
+    .select("id, name, role, specialty, avatar_url, is_available")
+    .eq("is_available", true)
+    .eq("is_verified", true);
 
+  if (role) {
+    query = query.eq("role", role);
+  } else {
+    query = query.in("role", ["DOCTOR", "PHARMACIST", "NURSE", "LAB_SCIENTIST"]);
+  }
+
+  if (specialty) {
+    query = query.ilike("specialty", `%${specialty}%`);
+  }
+
+  const { data: professionals, error } = await query;
+
+  if (error) return NextResponse.json({ error: "Fetch failed" }, { status: 500 });
   return NextResponse.json(professionals);
 }

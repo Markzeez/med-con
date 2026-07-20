@@ -17,7 +17,7 @@ export function useSocket() {
     // Reuse singleton socket
     if (!socketInstance) {
       socketInstance = io(process.env.NEXT_PUBLIC_APP_URL || "", {
-        path: "/api/socket",
+        // DO NOT set path: "/api/socket" — the server uses the default "/socket.io"
         transports: ["websocket", "polling"],
       });
     }
@@ -48,7 +48,7 @@ export function useSocket() {
     };
   }, []);
 
-  const off = useCallback((event: string, handler?: (...args: any[]) => void) => {
+  const off = useCallback((event: string, handler?: (...args: unknown[]) => void) => {
     if (handler) {
       socketRef.current?.off(event, handler);
     } else {

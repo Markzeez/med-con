@@ -1,20 +1,23 @@
+// src/app/chat/[roomId]/page.tsx
 "use client";
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, use } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useSocket } from "@/hooks/useSocket";
-import { Message } from "@/types";
+import type { Message } from "@/types";
 
 interface ChatPageProps {
-  params: { roomId: string };
+  params: Promise<{ roomId: string }>;
 }
 
 export default function ChatPage({ params }: ChatPageProps) {
-  const { roomId } = params;
+  // Next.js 16: params is a Promise — unwrap with use()
+  const { roomId } = use(params);
+
   const { data: session, status } = useSession();
   const router = useRouter();
-  const { emit, on, off } = useSocket();
+  const { emit, on } = useSocket();
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -30,7 +33,7 @@ export default function ChatPage({ params }: ChatPageProps) {
     if (status === "unauthenticated") router.push("/auth/login");
   }, [status, router]);
 
-  // Load room info & message history
+  // Load message history
   useEffect(() => {
     if (!session) return;
 
@@ -40,15 +43,28 @@ export default function ChatPage({ params }: ChatPageProps) {
         return r.json();
       })
       .then((msgs) => {
-        if (msgs) setMessages(msgs);
+        if (msgs) {
+          // Map snake_case from Supabase to camelCase for UI
+          const mapped = msgs.map((m: any) => ({
+            id: m.id,
+            roomId: m.room_id,
+            senderId: m.sender_id,
+            content: m.content,
+            type: m.type,
+            isRead: m.is_read,
+            createdAt: m.created_at,
+            sender: m.sender,
+          }));
+          setMessages(mapped);
+        }
         setLoading(false);
       });
 
-    // Also fetch room info
-    fetch(`/api/booking`)
+    // Fetch room info for header
+    fetch("/api/booking")
       .then((r) => r.json())
       .then((bookings) => {
-        const b = bookings.find((bk: any) => bk.room?.id === roomId);
+        const b = bookings.find((bk: any) => bk.room_id === roomId);
         if (b) setRoomInfo(b);
       });
   }, [session, roomId, router]);
@@ -59,10 +75,26 @@ export default function ChatPage({ params }: ChatPageProps) {
 
     emit("room:join", { roomId, userId: session.user.id, role: session.user.role });
 
-    const removeMsg = on<Message>("message:receive", (msg) => {
+    const removeMsg = on<any>("message:receive", (msg) => {
+      const mapped: Message = {
+        id: msg.id,
+        roomId: msg.room_id || msg.roomId || roomId,
+        senderId: msg.sender_id || msg.senderId,
+        content: msg.content,
+        type: msg.type || "text",
+        isRead: msg.is_read ?? false,
+        createdAt: msg.created_at || msg.createdAt || new Date().toISOString(),
+        sender: msg.sender,
+      };
+
       setMessages((prev) => {
-        if (prev.find((m) => m.id === msg.id)) return prev;
-        return [...prev, msg];
+        // Dedup: if we already have this exact message by ID, skip
+        if (prev.find((m) => m.id === mapped.id)) return prev;
+        // Remove optimistic temp message from the same sender with same content
+        const filtered = prev.filter(
+          (m) => !(m.id.startsWith("tmp_") && m.senderId === mapped.senderId && m.content === mapped.content)
+        );
+        return [...filtered, mapped];
       });
     });
 
@@ -102,14 +134,15 @@ export default function ChatPage({ params }: ChatPageProps) {
   function sendMessage() {
     if (!input.trim() || !session) return;
 
-    const msg: Partial<Message> = {
+    const msg = {
       senderId: session.user.id,
       content: input.trim(),
       type: "text",
     };
 
     emit("message:send", { roomId, message: msg });
-    // Optimistic add
+
+    // Optimistic add — will be replaced when server echoes back
     setMessages((prev) => [...prev, {
       id: `tmp_${Date.now()}`,
       roomId,
@@ -118,7 +151,15 @@ export default function ChatPage({ params }: ChatPageProps) {
       type: "text",
       isRead: false,
       createdAt: new Date().toISOString(),
-      sender: { id: session.user.id, name: session.user.name!, role: session.user.role as any, isVerified: true, isAvailable: true, email: session.user.email!, createdAt: "" },
+      sender: {
+        id: session.user.id,
+        name: session.user.name!,
+        role: session.user.role as any,
+        isVerified: true,
+        isAvailable: true,
+        email: session.user.email!,
+        createdAt: "",
+      },
     }]);
 
     setInput("");
@@ -129,9 +170,7 @@ export default function ChatPage({ params }: ChatPageProps) {
     setInput(e.target.value);
     if (!session) return;
     emit("typing:start", { roomId, userId: session.user.id, name: session.user.name! });
-    if (typingTimer.current) {
-      clearTimeout(typingTimer.current);
-    }
+    if (typingTimer.current) clearTimeout(typingTimer.current);
     typingTimer.current = setTimeout(() => {
       emit("typing:stop", { roomId, userId: session.user.id });
     }, 1500);
@@ -194,7 +233,6 @@ export default function ChatPage({ params }: ChatPageProps) {
           </div>
         </div>
 
-        {/* Emergency button — only patients */}
         {isPatient && (
           <button
             onClick={dispatchAmbulance}

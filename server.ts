@@ -1,12 +1,22 @@
+// server.ts
+import 'dotenv/config';
 import { createServer, IncomingMessage, ServerResponse } from "http";
 import { parse } from "url";
 import next from "next";
 import { Server, Socket } from "socket.io";
+import { createClient } from "@supabase/supabase-js";
 import type { Role, Message, Booking, AmbulanceStatus } from "./src/types/index";
 
 const dev = process.env.NODE_ENV !== "production";
 const app = next({ dev });
 const handle = app.getRequestHandler();
+
+// Supabase client for server-side message persistence
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  { auth: { persistSession: false, autoRefreshToken: false } }
+);
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -24,7 +34,6 @@ interface RoomParticipant {
 
 interface ActiveRoom {
   participants: RoomParticipant[];
-  messages: Partial<Message>[];
 }
 
 interface SocketWithUser extends Socket {
@@ -50,7 +59,7 @@ app.prepare().then(() => {
     },
   });
 
-  // In-memory store (swap for Redis in production)
+  // In-memory presence tracking (swap for Redis in production)
   const activeRooms = new Map<string, ActiveRoom>();
   const onlineUsers = new Map<string, OnlineUser>();
 
@@ -74,7 +83,7 @@ app.prepare().then(() => {
       ({ roomId, userId, role }: { roomId: string; userId: string; role: Role }) => {
         socket.join(roomId);
         if (!activeRooms.has(roomId)) {
-          activeRooms.set(roomId, { participants: [], messages: [] });
+          activeRooms.set(roomId, { participants: [] });
         }
         const room = activeRooms.get(roomId)!;
         if (!room.participants.find((p) => p.userId === userId)) {
@@ -92,27 +101,45 @@ app.prepare().then(() => {
         const room = activeRooms.get(roomId);
         if (room) {
           room.participants = room.participants.filter((p) => p.userId !== userId);
+          if (room.participants.length === 0) {
+            activeRooms.delete(roomId);
+          }
         }
         io.to(roomId).emit("room:user_left", { userId });
       }
     );
 
-    // ── Messages ──────────────────────────────────────────────────────────
+    // ── Messages (PERSISTED to Supabase) ──────────────────────────────────
 
     socket.on(
       "message:send",
-      ({ roomId, message }: { roomId: string; message: Partial<Message> }) => {
-        const room = activeRooms.get(roomId);
-        if (!room) return;
+      async ({ roomId, message }: { roomId: string; message: Partial<Message> }) => {
+        try {
+          // Persist to database
+          const { data: saved, error } = await supabase
+            .from("messages")
+            .insert({
+              room_id: roomId,
+              sender_id: message.senderId,
+              content: message.content,
+              type: message.type || "text",
+            })
+            .select(`
+              *,
+              sender:users!messages_sender_id_fkey(id, name, role, avatar_url)
+            `)
+            .single();
 
-        const fullMessage: Partial<Message> & { id: string; timestamp: string } = {
-          id: `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`,
-          ...message,
-          timestamp: new Date().toISOString(),
-        } as Partial<Message> & { id: string; timestamp: string };
+          if (error) {
+            console.error("[Message] Failed to persist:", error);
+            return;
+          }
 
-        room.messages.push(fullMessage);
-        io.to(roomId).emit("message:receive", fullMessage);
+          // Broadcast the saved message (with DB-generated id and timestamp)
+          io.to(roomId).emit("message:receive", saved);
+        } catch (err) {
+          console.error("[Message] Unexpected error:", err);
+        }
       }
     );
 

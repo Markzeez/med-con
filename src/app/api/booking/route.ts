@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { supabase } from "@/lib/supabase";
 import { z } from "zod";
 
 const bookingSchema = z.object({
@@ -26,17 +26,29 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const data = bookingSchema.parse(body);
 
-    const booking = await prisma.booking.create({
-      data: {
-        patientId: session.user.id,
-        ...data,
-        scheduledAt: data.scheduledAt ? new Date(data.scheduledAt) : undefined,
-      },
-      include: {
-        patient: { select: { id: true, name: true, email: true } },
-        professional: { select: { id: true, name: true, role: true, specialty: true } },
-      },
-    });
+    // Insert booking and return nested fields using Supabase string joins
+    const { data: booking, error } = await supabase
+      .from("booking")
+      .insert([
+        {
+          patient_id: session.user.id,
+          professional_id: data.professionalId,
+          type: data.type,
+          scheduled_at: data.scheduledAt ? new Date(data.scheduledAt).toISOString() : null,
+          notes: data.notes,
+          address: data.address,
+          latitude: data.latitude,
+          longitude: data.longitude,
+        },
+      ])
+      .select(`
+        *,
+        patient:patient_id(id, name, email),
+        professional:professional_id(id, name, role, specialty)
+      `)
+      .single();
+
+    if (error) throw error;
 
     return NextResponse.json(booking, { status: 201 });
   } catch (error) {
@@ -53,18 +65,20 @@ export async function GET(req: NextRequest) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const isPatient = session.user.role === "PATIENT";
+  const foreignKeyColumn = isPatient ? "patient_id" : "professional_id";
 
-  const bookings = await prisma.booking.findMany({
-    where: isPatient
-      ? { patientId: session.user.id }
-      : { professionalId: session.user.id },
-    include: {
-      patient: { select: { id: true, name: true, avatarUrl: true } },
-      professional: { select: { id: true, name: true, role: true, specialty: true, avatarUrl: true } },
-      room: { select: { id: true, isActive: true } },
-    },
-    orderBy: { createdAt: "desc" },
-  });
+  const { data: bookings, error } = await supabase
+    .from("booking")
+    .select(`
+      *,
+      patient:patient_id(id, name, avatar_url),
+      professional:professional_id(id, name, role, specialty, avatar_url),
+      room:room(id, is_active)
+    `)
+    .eq(foreignKeyColumn, session.user.id)
+    .order("created_at", { ascending: false });
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   return NextResponse.json(bookings);
 }
@@ -76,21 +90,36 @@ export async function PATCH(req: NextRequest) {
 
   const { bookingId, status } = await req.json();
 
-  const booking = await prisma.booking.findUnique({
-    where: { id: bookingId },
-    include: { room: true },
-  });
+  // Fetch the booking first to verify ownership
+  const { data: booking, error: fetchError } = await supabase
+    .from("booking")
+    .select("professional_id")
+    .eq("id", bookingId)
+    .single();
 
-  if (!booking) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  if (booking.professionalId !== session.user.id) {
+  if (fetchError || !booking) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  if (booking.professional_id !== session.user.id) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
-  const updated = await prisma.booking.update({
-    where: { id: bookingId },
-    data: { status },
-    include: { patient: true, professional: true },
-  });
+  // Perform the update
+  const { data: updated, error: updateError } = await supabase
+    .from("booking")
+    .update({ status })
+    .eq("id", bookingId)
+    .select(`
+      *,
+      patient:patient_id(*),
+      professional:professional_id(*)
+    `)
+    .single();
+
+  if (updateError) {
+    return NextResponse.json({ error: updateError.message }, { status: 500 });
+  }
 
   return NextResponse.json(updated);
 }
